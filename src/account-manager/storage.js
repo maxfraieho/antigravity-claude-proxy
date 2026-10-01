@@ -24,7 +24,7 @@ export async function loadAccounts(configPath = ACCOUNT_CONFIG_PATH) {
         // Check if config file exists using async access
         await access(configPath, fsConstants.F_OK);
         const configData = await readFile(configPath, 'utf-8');
-        const config = JSON.parse(configData);
+        const config = JSON.parse(configData.replace(/^\uFEFF/, ''));
 
         const accounts = (config.accounts || []).map(acc => ({
             ...acc,
