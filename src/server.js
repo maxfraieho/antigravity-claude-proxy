@@ -21,6 +21,7 @@ import { clearThinkingSignatureCache } from './format/signature-cache.js';
 import { formatDuration } from './utils/helpers.js';
 import { logger } from './utils/logger.js';
 import usageStats from './modules/usage-stats.js';
+import layaClient from './modules/laya-client.js';
 
 // Parse fallback flag directly from command line args to avoid circular dependency
 const args = process.argv.slice(2);
@@ -713,9 +714,11 @@ app.post('/v1/messages/count_tokens', (req, res) => {
 
 
 /**
- * Native Token Compression Middleware
- * 1. Tool Result Trimming: If tool output exceeds 4000 chars or 80 lines, preserve first 50 lines and trailing 30 lines.
- * 2. System Brevity Directive: Inject concise agent output instruction.
+ * Native Token Compression Middleware + Laya Decision Router
+ * 1. Laya Fast Error Triage: Detects stack traces and compresses via mmBERT-base on host .251.
+ * 2. Tool Result Trimming: If output exceeds 4000 chars or 80 lines, preserve head and tail.
+ * 3. Tool Surface Reduction (TSR): Strip redundant schema fields from tool declarations.
+ * 4. System Brevity Directive: Inject concise agent output instruction.
  */
 function trimToolResult(content) {
     if (typeof content !== 'string') return content;
@@ -736,9 +739,24 @@ function trimToolResult(content) {
     }
 }
 
+async function processToolResultContent(content) {
+    if (typeof content !== 'string') return content;
+    if (layaClient.hasTracebackPattern(content)) {
+        try {
+            const triage = await layaClient.triageTraceback(content);
+            if (triage && triage.capsule) {
+                return `${triage.capsule}\n\n[Full traceback compressed by Laya Decision Router on .251: ${triage.summary}]`;
+            }
+        } catch (e) {
+            logger.debug(`[Compression] Laya triage fallback: ${e.message}`);
+        }
+    }
+    return trimToolResult(content);
+}
+
 const SYSTEM_BREVITY_DIRECTIVE = "Be concise, precise, and direct. Omit conversational filler, preamble, and repetitive commentary. Avoid repeating existing file content or prior context unless strictly requested.";
 
-function applyNativeCompression(request) {
+async function applyNativeCompression(request) {
     let bytesSaved = 0;
     if (Array.isArray(request.messages)) {
         for (const msg of request.messages) {
@@ -746,7 +764,7 @@ function applyNativeCompression(request) {
                 for (const part of msg.content) {
                     if (part.type === 'tool_result' && typeof part.content === 'string') {
                         const origLen = part.content.length;
-                        part.content = trimToolResult(part.content);
+                        part.content = await processToolResultContent(part.content);
                         if (part.content.length < origLen) {
                             bytesSaved += (origLen - part.content.length);
                         }
@@ -754,13 +772,27 @@ function applyNativeCompression(request) {
                 }
             } else if (typeof msg.content === 'string' && msg.role === 'tool') {
                 const origLen = msg.content.length;
-                msg.content = trimToolResult(msg.content);
+                msg.content = await processToolResultContent(msg.content);
                 if (msg.content.length < origLen) {
                     bytesSaved += (origLen - msg.content.length);
                 }
             }
         }
     }
+
+    if (Array.isArray(request.tools)) {
+        for (const tool of request.tools) {
+            if (tool.input_schema) {
+                delete tool.input_schema.$schema;
+                delete tool.input_schema.title;
+            }
+            if (tool.parameters) {
+                delete tool.parameters.$schema;
+                delete tool.parameters.title;
+            }
+        }
+    }
+
     if (request.system) {
         if (!request.system.includes("Be concise, precise, and direct")) {
             request.system = `${SYSTEM_BREVITY_DIRECTIVE}\n\n${request.system}`;
@@ -769,7 +801,7 @@ function applyNativeCompression(request) {
         request.system = SYSTEM_BREVITY_DIRECTIVE;
     }
     if (bytesSaved > 0) {
-        logger.info(`[Native Compression] Optimized payload: trimmed ~${bytesSaved} bytes of tool output`);
+        logger.info(`[Native Compression] Optimized payload: trimmed ~${bytesSaved} bytes of tool/error output (Laya enabled)`);
     }
 }
 
@@ -865,7 +897,7 @@ app.post('/v1/messages', async (req, res) => {
             temperature
         };
 
-        applyNativeCompression(request);
+        await applyNativeCompression(request);
         logger.info(`[API] Request for model: ${request.model}, stream: ${!!stream}, tools: ${tools ? tools.length : 0} [${tools ? tools.map(t => t.name).join(", ") : ""}]`);
 
         // Debug: Log message structure to diagnose tool_use/tool_result ordering
@@ -1124,7 +1156,7 @@ app.post('/v1/chat/completions', async (req, res) => {
             top_p
         };
 
-        applyNativeCompression(request);
+        await applyNativeCompression(request);
         logger.info(`[API] OpenAI Chat Completion for model: ${request.model}, stream: ${!!stream}, tools: ${tools ? tools.length : 0}`);
 
         if (stream) {
@@ -1379,6 +1411,17 @@ app.post('/v1/chat/completions', async (req, res) => {
     }
 });
 
+app.get('/api/laya/status', async (req, res) => {
+    try {
+        const healthy = await layaClient.checkLayaHealth();
+        res.json({
+            status: healthy ? 'ok' : 'degraded',
+            ...layaClient.getLayaStats()
+        });
+    } catch (err) {
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
 usageStats.setupRoutes(app);
 
 app.use('*', (req, res) => {
