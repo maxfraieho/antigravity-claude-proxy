@@ -797,6 +797,12 @@ app.post('/v1/messages', async (req, res) => {
         } = req.body;
 
         let requestedModel = model || 'claude-3-5-sonnet-20241022';
+        if (requestedModel && requestedModel.includes('/')) {
+            requestedModel = requestedModel.split('/').pop();
+        }
+        if (requestedModel === 'gemini-3.8-flash') {
+            requestedModel = 'gemini-3.8-flash-tiered';
+        }
         if (requestedModel === 'gemini-3.5-flash-medium') {
             requestedModel = 'gemini-3.5-flash-low';
         }
@@ -1089,10 +1095,16 @@ app.post('/v1/chat/completions', async (req, res) => {
             }
         }
 
-        let requestedModel = model || 'claude-3-5-sonnet-20241022';
+        let requestedModel = model || 'claude-sonnet-4-6';
 
+        if (requestedModel && requestedModel.includes('/')) {
+            requestedModel = requestedModel.split('/').pop();
+        }
+        if (requestedModel === 'gemini-3.8-flash') {
+            requestedModel = 'gemini-3.8-flash-tiered';
+        }
         if (requestedModel.startsWith('gpt-')) {
-            requestedModel = 'claude-3-5-sonnet-20241022';
+            requestedModel = 'claude-sonnet-4-6';
         }
 
         const modelMapping = config.modelMapping || {};
