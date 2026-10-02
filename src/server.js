@@ -711,6 +711,68 @@ app.post('/v1/messages/count_tokens', (req, res) => {
  */
 
 
+
+/**
+ * Native Token Compression Middleware
+ * 1. Tool Result Trimming: If tool output exceeds 4000 chars or 80 lines, preserve first 50 lines and trailing 30 lines.
+ * 2. System Brevity Directive: Inject concise agent output instruction.
+ */
+function trimToolResult(content) {
+    if (typeof content !== 'string') return content;
+    const lines = content.split('\n');
+    if (content.length <= 4000 && lines.length <= 80) return content;
+
+    if (lines.length > 80) {
+        const head = lines.slice(0, 50).join('\n');
+        const tail = lines.slice(-30).join('\n');
+        const omittedLines = lines.length - 80;
+        const omittedBytes = content.length - (head.length + tail.length);
+        return `${head}\n\n... [TRUNCATED ${omittedLines} LINES / ${omittedBytes} BYTES BY NATIVE PROXY] ...\n\n${tail}`;
+    } else {
+        const head = content.substring(0, 2500);
+        const tail = content.substring(content.length - 1500);
+        const omittedBytes = content.length - 4000;
+        return `${head}\n\n... [TRUNCATED ${omittedBytes} BYTES BY NATIVE PROXY] ...\n\n${tail}`;
+    }
+}
+
+const SYSTEM_BREVITY_DIRECTIVE = "Be concise, precise, and direct. Omit conversational filler, preamble, and repetitive commentary. Avoid repeating existing file content or prior context unless strictly requested.";
+
+function applyNativeCompression(request) {
+    let bytesSaved = 0;
+    if (Array.isArray(request.messages)) {
+        for (const msg of request.messages) {
+            if (Array.isArray(msg.content)) {
+                for (const part of msg.content) {
+                    if (part.type === 'tool_result' && typeof part.content === 'string') {
+                        const origLen = part.content.length;
+                        part.content = trimToolResult(part.content);
+                        if (part.content.length < origLen) {
+                            bytesSaved += (origLen - part.content.length);
+                        }
+                    }
+                }
+            } else if (typeof msg.content === 'string' && msg.role === 'tool') {
+                const origLen = msg.content.length;
+                msg.content = trimToolResult(msg.content);
+                if (msg.content.length < origLen) {
+                    bytesSaved += (origLen - msg.content.length);
+                }
+            }
+        }
+    }
+    if (request.system) {
+        if (!request.system.includes("Be concise, precise, and direct")) {
+            request.system = `${SYSTEM_BREVITY_DIRECTIVE}\n\n${request.system}`;
+        }
+    } else {
+        request.system = SYSTEM_BREVITY_DIRECTIVE;
+    }
+    if (bytesSaved > 0) {
+        logger.info(`[Native Compression] Optimized payload: trimmed ~${bytesSaved} bytes of tool output`);
+    }
+}
+
 /**
  * Anthropic-compatible Messages API
  * POST /v1/messages
@@ -797,6 +859,7 @@ app.post('/v1/messages', async (req, res) => {
             temperature
         };
 
+        applyNativeCompression(request);
         logger.info(`[API] Request for model: ${request.model}, stream: ${!!stream}, tools: ${tools ? tools.length : 0} [${tools ? tools.map(t => t.name).join(", ") : ""}]`);
 
         // Debug: Log message structure to diagnose tool_use/tool_result ordering
@@ -963,7 +1026,7 @@ app.post('/v1/chat/completions', async (req, res) => {
                 const toolBlock = {
                     type: 'tool_result',
                     tool_use_id: msg.tool_call_id || msg.name || 'call_0',
-                    content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content || '')
+                    content: trimToolResult(typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content || ''))
                 };
                 const lastMsg = convertedMessages[convertedMessages.length - 1];
                 if (lastMsg && lastMsg.role === 'user' && Array.isArray(lastMsg.content)) {
@@ -1049,6 +1112,7 @@ app.post('/v1/chat/completions', async (req, res) => {
             top_p
         };
 
+        applyNativeCompression(request);
         logger.info(`[API] OpenAI Chat Completion for model: ${request.model}, stream: ${!!stream}, tools: ${tools ? tools.length : 0}`);
 
         if (stream) {
