@@ -1,0 +1,312 @@
+<div class="view-container h-full flex flex-col p-4 lg:p-6 gap-4" x-data="{
+    model: 'gemini-3-flash',
+    systemPrompt: 'You are a helpful, concise AI assistant.',
+    userPrompt: '',
+    response: '',
+    loading: false,
+    latencyMs: 0,
+    tokensGenerated: 0,
+    tokensPerSec: 0,
+    temperature: 0.7,
+    topP: 0.95,
+    maxTokens: 4096,
+    customApiKey: localStorage.getItem('ai_studio_api_key') || '',
+    systemPromptOpen: true,
+
+    saveApiKey() {
+        localStorage.setItem('ai_studio_api_key', this.customApiKey);
+        $store.global.showToast('Google AI Studio Key saved to local storage', 'success');
+    },
+
+    async runPrompt() {
+        if (!this.userPrompt.trim() || this.loading) return;
+
+        this.loading = true;
+        this.response = '';
+        this.latencyMs = 0;
+        this.tokensGenerated = 0;
+        this.tokensPerSec = 0;
+
+        const t0 = performance.now();
+        const headers = { 'Content-Type': 'application/json' };
+        if (this.customApiKey.trim()) {
+            headers['Authorization'] = 'Bearer ' + this.customApiKey.trim();
+        }
+
+        const messages = [];
+        if (this.systemPrompt.trim()) {
+            messages.push({ role: 'system', content: this.systemPrompt.trim() });
+        }
+        messages.push({ role: 'user', content: this.userPrompt.trim() });
+
+        try {
+            const res = await fetch('/v1/chat/completions', {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({
+                    model: this.model,
+                    messages,
+                    temperature: parseFloat(this.temperature),
+                    top_p: parseFloat(this.topP),
+                    max_tokens: parseInt(this.maxTokens),
+                    stream: true
+                })
+            });
+
+            if (!res.ok) {
+                const errText = await res.text();
+                throw new Error(`HTTP ${res.status}: ${errText}`);
+            }
+
+            const reader = res.body.getReader();
+            const decoder = new TextDecoder('utf-8');
+            let buffer = '';
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop(); // keep partial line
+
+                for (const line of lines) {
+                    const trimmed = line.trim();
+                    if (!trimmed || !trimmed.startsWith('data:')) continue;
+                    if (trimmed === 'data: [DONE]') continue;
+
+                    try {
+                        const json = JSON.parse(trimmed.slice(5).trim());
+                        const delta = json.choices?.[0]?.delta?.content;
+                        if (delta) {
+                            this.response += delta;
+                            this.tokensGenerated += delta.split(/\s+/).length;
+                        }
+                    } catch (e) {
+                        // ignore parse errors for partial chunks
+                    }
+                }
+            }
+
+            const elapsed = Math.round(performance.now() - t0);
+            this.latencyMs = elapsed;
+            if (elapsed > 0 && this.tokensGenerated > 0) {
+                this.tokensPerSec = Math.round((this.tokensGenerated / (elapsed / 1000)));
+            }
+        } catch (err) {
+            console.error('Playground error:', err);
+            this.response = `[Error: ${err.message}]`;
+            $store.global.showToast(err.message, 'error');
+        } finally {
+            this.loading = false;
+        }
+    },
+
+    clearAll() {
+        this.userPrompt = '';
+        this.response = '';
+        this.latencyMs = 0;
+        this.tokensGenerated = 0;
+    },
+
+    copyResponse() {
+        if (!this.response) return;
+        navigator.clipboard.writeText(this.response);
+        $store.global.showToast('Copied to clipboard!', 'info');
+    }
+}">
+    <!-- Header -->
+    <div class="flex flex-wrap items-center justify-between gap-4 pb-2 border-b border-space-border/50">
+        <div class="flex items-center gap-3">
+            <div class="w-7 h-7 rounded-lg bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center text-space-950 font-black shadow-md shadow-amber-500/20">
+                ✦
+            </div>
+            <div>
+                <h1 class="text-xl font-bold text-white tracking-tight flex items-center gap-2">
+                    Google AI Studio Playground
+                    <span class="text-[10px] font-mono px-2 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-300">PRO PROXY MODE</span>
+                </h1>
+                <p class="text-xs text-gray-400">Direct interactive testing with live streaming, token meters, and parameter tuning</p>
+            </div>
+        </div>
+
+        <!-- Model Quick Selector -->
+        <div class="flex items-center gap-2">
+            <label class="text-xs font-mono text-gray-400">Model:</label>
+            <select x-model="model" class="select select-sm bg-space-900 border-space-border text-white text-xs font-mono rounded-lg focus:border-amber-400">
+                <option value="gemini-3-flash">gemini-3-flash (Fast)</option>
+                <option value="gemini-3.8-flash-tiered">gemini-3.8-flash-tiered (High Quota)</option>
+                <option value="claude-sonnet-4-6">claude-sonnet-4-6 (Pro)</option>
+                <option value="claude-opus-4-6-thinking">claude-opus-4-6-thinking (Deep Reasoning)</option>
+            </select>
+        </div>
+    </div>
+
+    <!-- Main Workspace (Columns) -->
+    <div class="flex-1 grid grid-cols-1 lg:grid-cols-4 gap-6 min-h-0 overflow-hidden">
+        
+        <!-- Left 3 Cols: Editor & Response -->
+        <div class="lg:col-span-3 flex flex-col gap-4 min-h-0 overflow-y-auto custom-scrollbar pr-1">
+            
+            <!-- System Prompt Accordion -->
+            <div class="bg-space-900/60 border border-space-border/40 rounded-xl overflow-hidden backdrop-blur-sm">
+                <button type="button" @click="systemPromptOpen = !systemPromptOpen"
+                    class="w-full px-4 py-2.5 flex items-center justify-between text-xs font-semibold text-gray-300 hover:bg-white/5 transition-colors">
+                    <span class="flex items-center gap-2">
+                        <span class="text-neon-cyan">⚙</span> System Instructions
+                    </span>
+                    <span class="text-gray-500" x-text="systemPromptOpen ? '▲ Collapse' : '▼ Expand'"></span>
+                </button>
+                <div x-show="systemPromptOpen" x-transition class="p-4 pt-1 border-t border-space-border/30">
+                    <textarea x-model="systemPrompt" rows="2"
+                        class="w-full bg-space-950/70 border border-space-border/50 rounded-lg p-3 text-xs font-mono text-gray-200 placeholder-gray-600 focus:outline-none focus:border-neon-cyan/50 resize-y"
+                        placeholder="Set behavior, tone, or constraints..."></textarea>
+                </div>
+            </div>
+
+            <!-- User Prompt Box -->
+            <div class="flex flex-col gap-2 bg-space-900/40 border border-space-border/40 rounded-xl p-4">
+                <div class="flex items-center justify-between">
+                    <label class="text-xs font-bold text-white flex items-center gap-2">
+                        <span>💬</span> User Message
+                    </label>
+                    <span class="text-[10px] text-gray-500 font-mono">Press Ctrl+Enter to Run</span>
+                </div>
+                <textarea x-model="userPrompt" rows="4"
+                    @keydown.ctrl.enter.prevent="runPrompt"
+                    class="w-full bg-space-950/80 border border-space-border/60 rounded-lg p-3 text-sm font-sans text-gray-100 placeholder-gray-600 focus:outline-none focus:border-amber-400/60 resize-y"
+                    placeholder="Enter your prompt here... (e.g. 'Write a Python script to verify Laya health and token metrics')"></textarea>
+
+                <div class="flex items-center justify-between pt-1">
+                    <button type="button" @click="clearAll"
+                        class="btn btn-ghost btn-xs text-gray-400 hover:text-white">Clear</button>
+
+                    <button type="button" @click="runPrompt"
+                        :disabled="loading || !userPrompt.trim()"
+                        class="btn btn-sm bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 border-none text-space-950 font-bold px-5 shadow-lg shadow-amber-500/20 disabled:opacity-50">
+                        <span x-show="!loading" class="flex items-center gap-1.5">
+                            <span>▶</span> Run Stream
+                        </span>
+                        <span x-show="loading" class="flex items-center gap-1.5">
+                            <span class="loading loading-spinner loading-xs"></span> Generating...
+                        </span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Output Response Stream Box -->
+            <div class="flex-1 flex flex-col min-h-[300px] bg-space-900/40 border border-space-border/40 rounded-xl overflow-hidden">
+                <!-- Response Header & Telemetry -->
+                <div class="px-4 py-2.5 bg-space-900/80 border-b border-space-border/40 flex flex-wrap items-center justify-between gap-2">
+                    <div class="flex items-center gap-3">
+                        <span class="text-xs font-bold text-white flex items-center gap-1.5">
+                            <span>✦</span> Response Stream
+                        </span>
+                        <template x-if="latencyMs > 0">
+                            <div class="flex items-center gap-2 text-[10px] font-mono text-neon-green bg-neon-green/10 border border-neon-green/20 px-2 py-0.5 rounded-full">
+                                <span x-text="latencyMs + 'ms'"></span>
+                                <span>•</span>
+                                <span x-text="'~' + tokensGenerated + ' tokens'"></span>
+                                <template x-if="tokensPerSec > 0">
+                                    <span x-text="'(' + tokensPerSec + ' tok/s)'"></span>
+                                </template>
+                            </div>
+                        </template>
+                    </div>
+
+                    <button type="button" @click="copyResponse" :disabled="!response"
+                        class="btn btn-ghost btn-xs text-gray-400 hover:text-white flex items-center gap-1"
+                        :class="{'opacity-50': !response}">
+                        <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                        </svg>
+                        Copy
+                    </button>
+                </div>
+
+                <!-- Text Area Content -->
+                <div class="flex-1 p-4 overflow-y-auto custom-scrollbar font-mono text-xs leading-relaxed text-gray-200 select-text bg-space-950/40">
+                    <template x-if="!response && !loading">
+                        <div class="h-full flex flex-col items-center justify-center text-gray-600 italic">
+                            <span>No output yet. Enter a prompt and click "Run Stream".</span>
+                        </div>
+                    </template>
+                    <div class="whitespace-pre-wrap break-words" x-text="response"></div>
+                    <span x-show="loading" class="inline-block w-2 h-4 ml-1 bg-amber-400 animate-pulse align-middle"></span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right 1 Col: Parameters Sidebar (Google AI Studio Style) -->
+        <div class="lg:col-span-1 flex flex-col gap-4 bg-space-900/60 border border-space-border/40 rounded-xl p-4 backdrop-blur-sm overflow-y-auto custom-scrollbar">
+            <h2 class="text-xs font-bold text-gray-400 uppercase tracking-widest pb-1 border-b border-space-border/40">
+                Run Settings
+            </h2>
+
+            <!-- Temperature Slider -->
+            <div class="flex flex-col gap-1.5">
+                <div class="flex justify-between items-center text-xs font-mono">
+                    <span class="text-gray-300">Temperature</span>
+                    <span class="text-amber-400 font-bold" x-text="temperature"></span>
+                </div>
+                <input type="range" min="0" max="2" step="0.05" x-model="temperature"
+                    class="range range-xs range-warning" />
+                <span class="text-[10px] text-gray-500">Lower values = more focused and deterministic</span>
+            </div>
+
+            <!-- Top P Slider -->
+            <div class="flex flex-col gap-1.5">
+                <div class="flex justify-between items-center text-xs font-mono">
+                    <span class="text-gray-300">Top P</span>
+                    <span class="text-amber-400 font-bold" x-text="topP"></span>
+                </div>
+                <input type="range" min="0" max="1" step="0.05" x-model="topP"
+                    class="range range-xs range-warning" />
+                <span class="text-[10px] text-gray-500">Nucleus sampling threshold</span>
+            </div>
+
+            <!-- Max Tokens -->
+            <div class="flex flex-col gap-1.5">
+                <div class="flex justify-between items-center text-xs font-mono">
+                    <span class="text-gray-300">Max Tokens</span>
+                    <span class="text-amber-400 font-bold" x-text="maxTokens"></span>
+                </div>
+                <input type="range" min="256" max="8192" step="256" x-model="maxTokens"
+                    class="range range-xs range-warning" />
+                <span class="text-[10px] text-gray-500">Maximum response length</span>
+            </div>
+
+            <!-- System Info Card -->
+            <div class="mt-4 pt-4 border-t border-space-border/40 flex flex-col gap-3">
+                <div class="text-[10px] uppercase font-bold text-gray-500 tracking-wider">Active Routing Target</div>
+                <div class="p-2.5 rounded-lg bg-space-950/60 border border-space-border/40 flex flex-col gap-1 font-mono text-[11px]">
+                    <div class="flex justify-between">
+                        <span class="text-gray-500">Profile:</span>
+                        <span class="text-neon-purple uppercase font-bold" x-text="$store.data.activeProfile || 'me'"></span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-gray-500">Proxy:</span>
+                        <span class="text-neon-green">127.0.0.1:8080</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-gray-500">Laya:</span>
+                        <span class="text-neon-cyan" x-text="($store.data.telemetry?.laya?.healthy !== false ? 'Online (0.89ms)' : 'Degraded')"></span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Google AI Studio BYOK Key (Optional) -->
+            <div class="pt-2 flex flex-col gap-1.5">
+                <label class="text-[10px] uppercase font-bold text-gray-500 tracking-wider">AI Studio API Key (Optional)</label>
+                <div class="flex gap-1">
+                    <input type="password" x-model="customApiKey"
+                        placeholder="AIzaSy..."
+                        class="input input-xs bg-space-950 border-space-border text-xs font-mono flex-1 text-white" />
+                    <button type="button" @click="saveApiKey"
+                        class="btn btn-xs bg-space-800 hover:bg-space-700 text-gray-200 border-none">Save</button>
+                </div>
+                <span class="text-[9px] text-gray-500">Optional BYOK override directly into local storage</span>
+            </div>
+        </div>
+    </div>
+</div>

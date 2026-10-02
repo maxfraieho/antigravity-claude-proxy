@@ -25,6 +25,10 @@ document.addEventListener('alpine:init', () => {
         connectionStatus: 'connecting',
         lastUpdated: '-',
         healthCheckTimer: null,
+        activeProfile: 'me',
+        availableProfiles: ['me', 'son'],
+        switchingProfile: false,
+        telemetry: null,
 
         // Filters state
         filters: {
@@ -157,6 +161,10 @@ document.addEventListener('alpine:init', () => {
 
                 this.computeQuotaRows();
 
+                // Fetch profiles and telemetry asynchronously
+                this.fetchProfiles();
+                this.fetchTelemetry();
+
                 this.lastUpdated = new Date().toLocaleTimeString();
             } catch (error) {
                 // Keep error logging for actual fetch failures
@@ -166,6 +174,60 @@ document.addEventListener('alpine:init', () => {
             } finally {
                 this.loading = false;
                 this.initialLoad = false; // Mark initial load as complete
+            }
+        },
+
+        async fetchProfiles() {
+            try {
+                const res = await fetch('/api/profiles');
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data.status === 'ok') {
+                        this.activeProfile = data.activeProfile || 'me';
+                        this.availableProfiles = data.availableProfiles || ['me', 'son'];
+                    }
+                }
+            } catch (e) {
+                // Silently ignore background polling errors
+            }
+        },
+
+        async switchProfile(targetProfile) {
+            if (this.switchingProfile || this.activeProfile === targetProfile) return;
+            this.switchingProfile = true;
+            const store = Alpine.store('global');
+            try {
+                const res = await fetch('/api/profiles/switch', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ profile: targetProfile })
+                });
+                const data = await res.json();
+                if (data.status === 'ok') {
+                    this.activeProfile = targetProfile;
+                    store.showToast(`Switched Antigravity profile to ${targetProfile.toUpperCase()}`, 'success');
+                    await this.fetchData();
+                } else {
+                    store.showToast(`Failed to switch profile: ${data.error || 'Unknown error'}`, 'error');
+                }
+            } catch (err) {
+                store.showToast(`Profile switch error: ${err.message}`, 'error');
+            } finally {
+                this.switchingProfile = false;
+            }
+        },
+
+        async fetchTelemetry() {
+            try {
+                const res = await fetch('/api/system/telemetry');
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data.status === 'ok') {
+                        this.telemetry = data;
+                    }
+                }
+            } catch (e) {
+                // Silently ignore background telemetry errors
             }
         },
 

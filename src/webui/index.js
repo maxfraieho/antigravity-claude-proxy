@@ -1282,5 +1282,47 @@ export function mountWebUI(app, dirname, accountManager) {
      * (same as CLI) to match Google OAuth Console's authorized redirect URIs
      */
 
+    /**
+     * Antigravity Profile Management
+     */
+    app.get('/api/profiles', async (req, res) => {
+        try {
+            const { getActiveProfile } = await import('../modules/profile-manager.js');
+            const data = await getActiveProfile();
+            res.json(data);
+        } catch (error) {
+            res.status(500).json({ status: 'error', error: error.message });
+        }
+    });
+
+    app.post('/api/profiles/switch', async (req, res) => {
+        try {
+            const { profile } = req.body || {};
+            if (!profile) {
+                return res.status(400).json({ status: 'error', error: 'Missing profile parameter' });
+            }
+            const { switchProfile } = await import('../modules/profile-manager.js');
+            const result = await switchProfile(profile);
+            // Reload accountManager to align activeIndex with newly switched profile
+            await accountManager.reload().catch(() => {});
+            res.json(result);
+        } catch (error) {
+            res.status(500).json({ status: 'error', error: error.message });
+        }
+    });
+
+    /**
+     * System Telemetry & Laya Decision Engine Status
+     */
+    app.get('/api/system/telemetry', async (req, res) => {
+        try {
+            const { getSystemTelemetry } = await import('../modules/system-telemetry.js');
+            const data = await getSystemTelemetry();
+            res.json(data);
+        } catch (error) {
+            res.status(500).json({ status: 'error', error: error.message });
+        }
+    });
+
     logger.info('[WebUI] Mounted at /');
 }
