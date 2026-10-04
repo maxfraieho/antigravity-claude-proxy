@@ -22,7 +22,9 @@ export async function getActiveProfile() {
         if (fs.existsSync(baseConfig)) {
             const { stdout } = await execAsync(`powershell -NoProfile -Command "(Get-Item '${baseConfig}').Target"`);
             targetPath = (stdout || '').trim();
-            if (targetPath.toLowerCase().includes('\\son')) {
+            if (targetPath.toLowerCase().includes('\\codex')) {
+                active = 'codex';
+            } else if (targetPath.toLowerCase().includes('\\son')) {
                 active = 'son';
             } else if (targetPath.toLowerCase().includes('\\me')) {
                 active = 'me';
@@ -36,20 +38,21 @@ export async function getActiveProfile() {
         status: 'ok',
         activeProfile: active,
         targetPath,
-        availableProfiles: ['me', 'son'],
+        availableProfiles: ['me', 'son', 'codex'],
         descriptions: {
             me: 'Primary Account (tukroschu@gmail.com)',
-            son: 'Secondary Account (arsen.k111999@gmail.com)'
+            son: 'Secondary Account (arsen.k111999@gmail.com)',
+            codex: 'Codex Account (arsen.k111999@gmail.com)'
         }
     };
 }
 
 /**
- * Switch active Antigravity profile (me vs son)
+ * Switch active Antigravity profile (me vs son vs codex)
  */
 export async function switchProfile(targetProfile) {
-    if (!['me', 'son'].includes(targetProfile)) {
-        throw new Error(`Invalid profile: ${targetProfile}. Valid options: me, son`);
+    if (!['me', 'son', 'codex'].includes(targetProfile)) {
+        throw new Error(`Invalid profile: ${targetProfile}. Valid options: me, son, codex`);
     }
 
     logger.info(`[ProfileManager] Switching active profile to: ${targetProfile}`);

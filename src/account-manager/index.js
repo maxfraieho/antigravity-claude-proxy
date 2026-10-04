@@ -182,13 +182,32 @@ export class AccountManager {
             throw new Error('AccountManager not initialized. Call initialize() first.');
         }
 
+        // Priority 1: Check if the user's active account (from active profile / activeIndex) is usable
+        if (this.#accounts.length > 0) {
+            const idx = (this.#currentIndex >= 0 && this.#currentIndex < this.#accounts.length)
+                ? this.#currentIndex
+                : 0;
+            const candidate = this.#accounts[idx];
+            if (this.#strategy.isAccountUsable(candidate, modelId)) {
+                candidate.lastUsed = Date.now();
+                this.saveToDisk().catch(() => {});
+                logger.info(`[AccountManager] Using active profile account: ${candidate.email} (${idx + 1}/${this.#accounts.length})`);
+                return { account: candidate, waitMs: 0 };
+            } else {
+                logger.warn(`[AccountManager] Active account (${candidate.email}) is currently unavailable for ${modelId || 'request'}. Failing over to available account...`);
+            }
+        }
+
+        // Priority 2: Failover to strategy selection (sticky/hybrid/round-robin)
         const result = this.#strategy.selectAccount(this.#accounts, modelId, {
             currentIndex: this.#currentIndex,
             onSave: () => this.saveToDisk(),
             ...options
         });
 
-        this.#currentIndex = result.index;
+        if (result.account) {
+            this.#currentIndex = result.index;
+        }
         return { account: result.account, waitMs: result.waitMs || 0 };
     }
 
@@ -422,6 +441,46 @@ export class AccountManager {
      */
     async saveToDisk() {
         await saveAccounts(this.#configPath, this.#accounts, this.#settings, this.#currentIndex);
+    }
+
+    /**
+     * Get active account index
+     * @returns {number}
+     */
+    getActiveIndex() {
+        return this.#currentIndex;
+    }
+
+    /**
+     * Set active account by index
+     * @param {number} index
+     * @returns {boolean}
+     */
+    setActiveIndex(index) {
+        if (typeof index === 'number' && index >= 0 && index < this.#accounts.length) {
+            this.#currentIndex = index;
+            const acc = this.#accounts[index];
+            if (acc && acc.modelRateLimits) {
+                acc.modelRateLimits = {};
+            }
+            this.saveToDisk().catch(() => {});
+            logger.info(`[AccountManager] Active account set to: ${acc?.email} (index ${index})`);
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Set active account by email substring
+     * @param {string} emailSubstring
+     * @returns {boolean}
+     */
+    setActiveAccount(emailSubstring) {
+        const idx = this.#accounts.findIndex(a => a.email.toLowerCase().includes(emailSubstring.toLowerCase()));
+        if (idx !== -1) {
+            return this.setActiveIndex(idx);
+        }
+        return false;
     }
 
     /**

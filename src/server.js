@@ -22,6 +22,7 @@ import { formatDuration } from './utils/helpers.js';
 import { logger } from './utils/logger.js';
 import usageStats from './modules/usage-stats.js';
 import layaClient from './modules/laya-client.js';
+import { getCodexAccountInfo, getCodexAccessToken } from './modules/codex-auth.js';
 
 // Parse fallback flag directly from command line args to avoid circular dependency
 const args = process.argv.slice(2);
@@ -433,6 +434,19 @@ app.get('/account-limits', async (req, res) => {
             }
         });
 
+        // Add Codex account if available
+        const codexInfo = getCodexAccountInfo();
+        if (codexInfo) {
+            accountLimits.push({
+                email: codexInfo.email,
+                status: codexInfo.status,
+                error: null,
+                subscription: { tier: 'pro', projectId: codexInfo.plan },
+                source: codexInfo.source,
+                models: codexInfo.models
+            });
+        }
+
         // Collect all unique model IDs
         const allModelIds = new Set();
         for (const account of accountLimits) {
@@ -564,11 +578,23 @@ app.get('/account-limits', async (req, res) => {
         const accountMetadataMap = new Map(
             accountStatus.accounts.map(a => [a.email, a])
         );
+        if (codexInfo) {
+            accountMetadataMap.set(codexInfo.email, {
+                email: codexInfo.email,
+                source: codexInfo.source,
+                enabled: true,
+                projectId: codexInfo.plan,
+                isInvalid: false,
+                invalidReason: null,
+                lastUsed: codexInfo.lastRefresh ? new Date(codexInfo.lastRefresh).getTime() : Date.now(),
+                modelRateLimits: {}
+            });
+        }
 
         // Build response data
         const responseData = {
             timestamp: new Date().toLocaleString(),
-            totalAccounts: allAccounts.length,
+            totalAccounts: accountLimits.length,
             models: sortedModels,
             modelConfig: config.modelMapping || {},
             globalQuotaThreshold: config.globalQuotaThreshold || 0,
@@ -669,6 +695,25 @@ app.get('/v1/models', async (req, res) => {
         }
         const token = await accountManager.getTokenForAccount(account);
         const models = await listModels(token);
+        const codexInfo = getCodexAccountInfo();
+        if (codexInfo && models && Array.isArray(models.data)) {
+            const codexModels = [
+                { id: 'gpt-5.6-terra', description: 'ChatGPT GPT-5.6 Terra (Codex Pro)' },
+                { id: 'gpt-5.6-luna', description: 'ChatGPT GPT-5.6 Luna (Codex Fast)' },
+                { id: 'gpt-reserve', description: 'ChatGPT Reserve' }
+            ];
+            for (const cm of codexModels) {
+                if (!models.data.some(m => m.id === cm.id)) {
+                    models.data.push({
+                        id: cm.id,
+                        object: 'model',
+                        created: 1700000000,
+                        owned_by: 'openai-codex',
+                        description: cm.description
+                    });
+                }
+            }
+        }
         if (models && Array.isArray(models.data)) {
             const lowIndex = models.data.findIndex(m => m.id === 'gemini-3.5-flash-low');
             if (lowIndex !== -1) {
@@ -679,6 +724,25 @@ app.get('/v1/models', async (req, res) => {
                 };
                 models.data.splice(lowIndex + 1, 0, mediumModel);
             }
+            // Add models array for OpenAI Codex CLI compatibility
+            models.models = models.data.map(m => ({
+                id: m.id,
+                slug: m.id,
+                display_name: m.description || m.id,
+                description: m.description || m.id,
+                default_reasoning_level: "medium",
+                supported_reasoning_levels: [
+                    { effort: "low", description: "Fast responses with lighter reasoning" },
+                    { effort: "medium", description: "Balances speed and reasoning depth" },
+                    { effort: "high", description: "Greater reasoning depth" }
+                ],
+                shell_type: "shell_command",
+                visibility: "list",
+                supported_in_api: true,
+                priority: 1,
+                support_verbosity: true,
+                default_verbosity: "low"
+            }));
         }
         res.json(models);
     } catch (error) {
@@ -1407,6 +1471,282 @@ app.post('/v1/chat/completions', async (req, res) => {
                     code: statusCode
                 }
             });
+        }
+    }
+});
+
+/**
+ * OpenAI Responses API (used by Codex CLI with wire_api=responses)
+ * POST /v1/responses
+ */
+app.post('/v1/responses', async (req, res) => {
+    try {
+        await ensureInitialized();
+
+        const {
+            model,
+            instructions,
+            input,
+            tools,
+            stream,
+            max_output_tokens,
+            temperature,
+            top_p,
+        } = req.body;
+
+        // Build system prompt from instructions + developer messages in input
+        let systemPrompt = instructions || '';
+        const convertedMessages = [];
+
+        if (Array.isArray(input)) {
+            for (const item of input) {
+                if (item.type === 'message') {
+                    const role = item.role;
+                    const content = item.content;
+
+                    if (role === 'developer' || role === 'system') {
+                        const text = Array.isArray(content)
+                            ? content.map(c => c.text || c.input_text || '').join('\n')
+                            : (typeof content === 'string' ? content : '');
+                        if (text) {
+                            if (systemPrompt) systemPrompt += '\n\n';
+                            systemPrompt += text;
+                        }
+                    } else if (role === 'user') {
+                        const text = Array.isArray(content)
+                            ? content.map(c => c.text || c.input_text || '').join('\n')
+                            : (typeof content === 'string' ? content : '');
+                        convertedMessages.push({ role: 'user', content: text });
+                    } else if (role === 'assistant') {
+                        const contentBlocks = [];
+                        if (Array.isArray(content)) {
+                            for (const c of content) {
+                                if (c.type === 'output_text' || c.type === 'text') {
+                                    contentBlocks.push({ type: 'text', text: c.text || '' });
+                                } else if (c.type === 'function_call' || c.type === 'tool_use') {
+                                    let parsedArgs = {};
+                                    try { parsedArgs = typeof c.arguments === 'string' ? JSON.parse(c.arguments) : (c.arguments || c.input || {}); } catch {}
+                                    contentBlocks.push({ type: 'tool_use', id: c.id || c.call_id || `call_0`, name: c.name, input: parsedArgs });
+                                }
+                            }
+                        } else if (typeof content === 'string') {
+                            contentBlocks.push({ type: 'text', text: content });
+                        }
+                        convertedMessages.push({ role: 'assistant', content: contentBlocks.length === 1 && contentBlocks[0].type === 'text' ? contentBlocks[0].text : contentBlocks });
+                    }
+                } else if (item.type === 'function_call_output' || item.type === 'tool_result') {
+                    const toolResult = {
+                        type: 'tool_result',
+                        tool_use_id: item.call_id || item.tool_use_id || 'call_0',
+                        content: await processToolResultContent(typeof item.output === 'string' ? item.output : JSON.stringify(item.output || ''))
+                    };
+                    const lastMsg = convertedMessages[convertedMessages.length - 1];
+                    if (lastMsg && lastMsg.role === 'user' && Array.isArray(lastMsg.content)) {
+                        lastMsg.content.push(toolResult);
+                    } else {
+                        convertedMessages.push({ role: 'user', content: [toolResult] });
+                    }
+                } else if (item.type === 'additional_tools') {
+                    // skip - these are tool definitions, handled via tools param
+                }
+            }
+        }
+
+        // Convert Responses API tools to Anthropic tools
+        let anthropicTools = undefined;
+        if (Array.isArray(tools) && tools.length > 0) {
+            anthropicTools = tools
+                .filter(t => t.type === 'function' || t.type === 'custom')
+                .map(t => {
+                    const fn = t.function || t.custom || t;
+                    return {
+                        name: (fn.name || t.name || 'tool').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64),
+                        description: fn.description || t.description || '',
+                        input_schema: fn.parameters || fn.input_schema || { type: 'object' }
+                    };
+                });
+            if (anthropicTools.length === 0) anthropicTools = undefined;
+        }
+
+        let requestedModel = model || 'gemini-3-flash';
+        if (requestedModel.includes('/')) requestedModel = requestedModel.split('/').pop();
+        if (requestedModel === 'gemini-3.8-flash') requestedModel = 'gemini-3.8-flash-tiered';
+        if (requestedModel.startsWith('gpt-')) requestedModel = 'claude-sonnet-4-6';
+        const modelMapping = config.modelMapping || {};
+        if (modelMapping[requestedModel]?.mapping) requestedModel = modelMapping[requestedModel].mapping;
+
+        const request = {
+            model: requestedModel,
+            messages: convertedMessages,
+            max_tokens: max_output_tokens || 4096,
+            stream: !!stream,
+            system: systemPrompt || undefined,
+            tools: anthropicTools,
+            temperature,
+            top_p
+        };
+
+        await applyNativeCompression(request);
+        logger.info(`[API] Responses API for model: ${request.model}, stream: ${!!stream}`);
+
+        const respId = 'resp_' + Math.random().toString(36).substring(2, 18);
+
+        const buildResponseObj = (status, outputItems) => ({
+            id: respId,
+            object: 'response',
+            status,
+            model: request.model,
+            output: outputItems || [],
+            usage: null
+        });
+
+        if (stream) {
+            res.status(200);
+            res.setHeader('Content-Type', 'text/event-stream');
+            res.setHeader('Cache-Control', 'no-cache');
+            res.setHeader('Connection', 'keep-alive');
+            res.setHeader('X-Accel-Buffering', 'no');
+            res.flushHeaders();
+
+            const sendEvent = (eventName, data) => {
+                res.write(`event: ${eventName}\ndata: ${JSON.stringify(data)}\n\n`);
+                if (res.flush) res.flush();
+            };
+
+            sendEvent('response.created', buildResponseObj('in_progress', []));
+
+            const generator = sendMessageStream(request, accountManager, FALLBACK_ENABLED);
+
+            // State tracking
+            let outputIndex = -1;
+            let msgId = null;
+            let textAccum = '';
+            let textStarted = false;
+            let funcCalls = []; // { id, name, argsAccum, outputIndex }
+            let currentFuncIdx = null;
+            let thinkingAccum = '';
+
+            const flushText = () => {
+                if (!textStarted) return;
+                const text = textAccum;
+                sendEvent('response.output_text.done', { output_index: outputIndex, content_index: 0, text });
+                sendEvent('response.content_part.done', { output_index: outputIndex, content_index: 0, part: { type: 'output_text', text } });
+                sendEvent('response.output_item.done', {
+                    output_index: outputIndex,
+                    item: { id: msgId, type: 'message', status: 'completed', role: 'assistant', content: [{ type: 'output_text', text }] }
+                });
+                textStarted = false;
+                textAccum = '';
+                msgId = null;
+            };
+
+            for await (const event of generator) {
+                if (!event) continue;
+
+                if (event.type === 'content_block_start') {
+                    const cb = event.content_block;
+                    if (cb?.type === 'tool_use') {
+                        flushText();
+                        outputIndex++;
+                        const fc = { id: cb.id || `call_${outputIndex}`, name: cb.name, argsAccum: '', outputIndex };
+                        funcCalls.push(fc);
+                        currentFuncIdx = funcCalls.length - 1;
+                        sendEvent('response.output_item.added', {
+                            output_index: outputIndex,
+                            item: { type: 'function_call', id: fc.id, call_id: fc.id, name: fc.name, arguments: '', status: 'in_progress' }
+                        });
+                    } else if (cb?.type === 'text' || cb?.type === 'thinking') {
+                        // text handled in delta
+                    }
+                } else if (event.type === 'content_block_delta') {
+                    const delta = event.delta;
+                    if (delta?.type === 'text_delta' && delta.text) {
+                        if (!textStarted) {
+                            outputIndex++;
+                            msgId = 'msg_' + Math.random().toString(36).substring(2, 14);
+                            textStarted = true;
+                            textAccum = '';
+                            sendEvent('response.output_item.added', {
+                                output_index: outputIndex,
+                                item: { id: msgId, type: 'message', role: 'assistant', status: 'in_progress', content: [] }
+                            });
+                            sendEvent('response.content_part.added', {
+                                output_index: outputIndex, content_index: 0,
+                                part: { type: 'output_text', text: '' }
+                            });
+                        }
+                        textAccum += delta.text;
+                        sendEvent('response.output_text.delta', { output_index: outputIndex, content_index: 0, delta: delta.text });
+                    } else if (delta?.type === 'input_json_delta' && currentFuncIdx !== null) {
+                        const fc = funcCalls[currentFuncIdx];
+                        fc.argsAccum += delta.partial_json || '';
+                        sendEvent('response.function_call_arguments.delta', { output_index: fc.outputIndex, delta: delta.partial_json || '' });
+                    } else if (delta?.type === 'thinking_delta' && delta.thinking) {
+                        thinkingAccum += delta.thinking;
+                    }
+                } else if (event.type === 'content_block_stop') {
+                    if (currentFuncIdx !== null) {
+                        const fc = funcCalls[currentFuncIdx];
+                        sendEvent('response.function_call_arguments.done', { output_index: fc.outputIndex, arguments: fc.argsAccum });
+                        sendEvent('response.output_item.done', {
+                            output_index: fc.outputIndex,
+                            item: { type: 'function_call', id: fc.id, call_id: fc.id, name: fc.name, arguments: fc.argsAccum, status: 'completed' }
+                        });
+                        currentFuncIdx = null;
+                    }
+                }
+            }
+
+            flushText();
+
+            // If nothing was output but we have thinking, send it as text
+            if (outputIndex === -1 && thinkingAccum.trim()) {
+                outputIndex++;
+                const tid = 'msg_' + Math.random().toString(36).substring(2, 14);
+                const text = thinkingAccum.trim();
+                sendEvent('response.output_item.added', { output_index: outputIndex, item: { id: tid, type: 'message', role: 'assistant', status: 'in_progress', content: [] } });
+                sendEvent('response.content_part.added', { output_index: outputIndex, content_index: 0, part: { type: 'output_text', text: '' } });
+                sendEvent('response.output_text.delta', { output_index: outputIndex, content_index: 0, delta: text });
+                sendEvent('response.output_text.done', { output_index: outputIndex, content_index: 0, text });
+                sendEvent('response.content_part.done', { output_index: outputIndex, content_index: 0, part: { type: 'output_text', text } });
+                sendEvent('response.output_item.done', { output_index: outputIndex, item: { id: tid, type: 'message', status: 'completed', role: 'assistant', content: [{ type: 'output_text', text }] } });
+            }
+
+            sendEvent('response.completed', buildResponseObj('completed', []));
+            res.write('data: [DONE]\n\n');
+            res.end();
+
+        } else {
+            const response = await sendMessage(request, accountManager, FALLBACK_ENABLED);
+
+            const outputItems = [];
+            const textBlocks = (response.content || []).filter(b => b.type === 'text');
+            const toolBlocks = (response.content || []).filter(b => b.type === 'tool_use');
+            const thinkingBlocks = (response.content || []).filter(b => b.type === 'thinking');
+
+            if (textBlocks.length > 0) {
+                const text = textBlocks.map(b => b.text).join('');
+                outputItems.push({ id: 'msg_' + Math.random().toString(36).substring(2, 14), type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text }] });
+            } else if (thinkingBlocks.length > 0 && toolBlocks.length === 0) {
+                const text = thinkingBlocks.map(b => b.thinking).join('\n\n').trim();
+                if (text) outputItems.push({ id: 'msg_' + Math.random().toString(36).substring(2, 14), type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text }] });
+            }
+
+            for (const tu of toolBlocks) {
+                outputItems.push({ type: 'function_call', id: tu.id || `call_${outputItems.length}`, call_id: tu.id || `call_${outputItems.length}`, name: tu.name, arguments: JSON.stringify(tu.input || {}), status: 'completed' });
+            }
+
+            res.json(buildResponseObj('completed', outputItems));
+        }
+
+    } catch (error) {
+        logger.error('[API] Responses API error:', error);
+        const { errorType, statusCode, errorMessage } = parseError(error);
+        if (res.headersSent) {
+            res.write(`event: error\ndata: ${JSON.stringify({ type: 'error', code: statusCode, message: errorMessage })}\n\n`);
+            res.end();
+        } else {
+            res.status(statusCode).json({ error: { message: errorMessage, type: errorType, code: statusCode } });
         }
     }
 });

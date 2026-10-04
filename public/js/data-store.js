@@ -26,7 +26,7 @@ document.addEventListener('alpine:init', () => {
         lastUpdated: '-',
         healthCheckTimer: null,
         activeProfile: 'me',
-        availableProfiles: ['me', 'son'],
+        availableProfiles: ['me', 'son', 'codex'],
         switchingProfile: false,
         telemetry: null,
 
@@ -184,7 +184,7 @@ document.addEventListener('alpine:init', () => {
                     const data = await res.json();
                     if (data.status === 'ok') {
                         this.activeProfile = data.activeProfile || 'me';
-                        this.availableProfiles = data.availableProfiles || ['me', 'son'];
+                        this.availableProfiles = data.availableProfiles || ['me', 'son', 'codex'];
                     }
                 }
             } catch (e) {

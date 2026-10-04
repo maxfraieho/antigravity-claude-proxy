@@ -269,12 +269,36 @@ export function mountWebUI(app, dirname, accountManager) {
     app.get('/api/accounts', async (req, res) => {
         try {
             const status = accountManager.getStatus();
+            const { getCodexAccountInfo } = await import('../modules/codex-auth.js');
+            const codexInfo = getCodexAccountInfo();
+            const accounts = [...status.accounts];
+            let total = status.total;
+            let available = status.available;
+
+            if (codexInfo) {
+                total++;
+                available++;
+                accounts.push({
+                    email: codexInfo.email,
+                    source: codexInfo.source,
+                    enabled: true,
+                    projectId: codexInfo.plan,
+                    modelRateLimits: {},
+                    isInvalid: false,
+                    invalidReason: null,
+                    verifyUrl: null,
+                    lastUsed: codexInfo.lastRefresh ? new Date(codexInfo.lastRefresh).getTime() : Date.now(),
+                    quotaThreshold: undefined,
+                    modelQuotaThresholds: {}
+                });
+            }
+
             res.json({
                 status: 'ok',
-                accounts: status.accounts,
+                accounts,
                 summary: {
-                    total: status.total,
-                    available: status.available,
+                    total,
+                    available,
                     rateLimited: status.rateLimited,
                     invalid: status.invalid
                 }
@@ -1303,9 +1327,21 @@ export function mountWebUI(app, dirname, accountManager) {
             }
             const { switchProfile } = await import('../modules/profile-manager.js');
             const result = await switchProfile(profile);
-            // Reload accountManager to align activeIndex with newly switched profile
+
+            // Re-sync accountManager activeIndex and reset rate limits for target profile
             await accountManager.reload().catch(() => {});
-            res.json(result);
+            if (profile === 'son' || profile === 'codex') {
+                accountManager.setActiveAccount('arsen');
+            } else if (profile === 'me') {
+                accountManager.setActiveAccount('tukroschu');
+            }
+
+            const activeAcc = accountManager.getStatus().accounts[accountManager.getActiveIndex()]?.email;
+            logger.info(`[WebUI] Profile switched to ${profile}, active account: ${activeAcc}`);
+            res.json({
+                ...result,
+                activeAccount: activeAcc
+            });
         } catch (error) {
             res.status(500).json({ status: 'error', error: error.message });
         }

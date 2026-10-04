@@ -282,20 +282,26 @@
                       x-text="$store.data.activeProfile || 'me'"></span>
             </div>
             <p class="text-xs text-gray-400 font-mono my-2">
-                Target: <span class="text-gray-200" x-text="$store.data.activeProfile === 'son' ? 'Secondary Account (arsen.k111999@gmail.com)' : 'Primary Account (tukroschu@gmail.com)'"></span>
+                Target: <span class="text-gray-200" x-text="$store.data.activeProfile === 'codex' ? 'Codex Account (arsen.k111999@gmail.com - ChatGPT)' : ($store.data.activeProfile === 'son' ? 'Secondary Account (arsen.k111999@gmail.com)' : 'Primary Account (tukroschu@gmail.com)')"></span>
             </p>
-            <div class="flex items-center gap-2 pt-1 border-t border-space-border/30">
+            <div class="flex items-center gap-1.5 pt-1 border-t border-space-border/30">
                 <button type="button" @click="$store.data.switchProfile('me')"
                     :disabled="$store.data.activeProfile === 'me' || $store.data.switchingProfile"
                     class="btn btn-xs flex-1 border-none text-[11px] font-mono transition-colors"
                     :class="$store.data.activeProfile === 'me' ? 'bg-neon-cyan/20 text-neon-cyan font-bold cursor-default' : 'bg-space-800 hover:bg-space-700 text-gray-300'">
-                    Switch: me
+                    me
                 </button>
                 <button type="button" @click="$store.data.switchProfile('son')"
                     :disabled="$store.data.activeProfile === 'son' || $store.data.switchingProfile"
                     class="btn btn-xs flex-1 border-none text-[11px] font-mono transition-colors"
                     :class="$store.data.activeProfile === 'son' ? 'bg-neon-purple/20 text-neon-purple font-bold cursor-default' : 'bg-space-800 hover:bg-space-700 text-gray-300'">
-                    Switch: son
+                    son
+                </button>
+                <button type="button" @click="$store.data.switchProfile('codex')"
+                    :disabled="$store.data.activeProfile === 'codex' || $store.data.switchingProfile"
+                    class="btn btn-xs flex-1 border-none text-[11px] font-mono transition-colors"
+                    :class="$store.data.activeProfile === 'codex' ? 'bg-emerald-500/20 text-emerald-300 font-bold cursor-default' : 'bg-space-800 hover:bg-space-700 text-gray-300'">
+                    codex
                 </button>
             </div>
         </div>
