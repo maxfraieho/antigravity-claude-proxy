@@ -386,6 +386,55 @@ window.Components.accountManager = () => ({
     },
 
     /**
+     * Get weekly Claude quota details (resets weekly on Sunday/Saturday)
+     */
+    getWeeklyClaudeQuota(account) {
+        const limits = account.limits || {};
+        const claudeModel = Object.keys(limits).find(k => k.includes('claude-sonnet') || k.includes('claude-opus'));
+        if (!claudeModel || !limits[claudeModel]) {
+            return null;
+        }
+        const l = limits[claudeModel];
+        const pct = l.remainingFraction !== null ? Math.round(l.remainingFraction * 100) : null;
+        let resetDesc = '';
+        if (l.resetTime) {
+            const diffDays = Math.ceil((new Date(l.resetTime).getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+            resetDesc = diffDays > 0 ? `Reset ${diffDays}d` : 'Reset today';
+        }
+        return {
+            percent: pct,
+            model: claudeModel,
+            resetDesc
+        };
+    },
+
+    /**
+     * Activate an account directly from the table
+     */
+    async activateAccount(email) {
+        const store = Alpine.store('global');
+        const dataStore = Alpine.store('data');
+        try {
+            const { response, newPassword } = await window.utils.request(
+                `/api/accounts/${encodeURIComponent(email)}/activate`,
+                { method: 'POST' },
+                store.webuiPassword
+            );
+            if (newPassword) store.webuiPassword = newPassword;
+            const data = await response.json();
+            if (data.status === 'ok') {
+                store.showToast(`Switched active profile to ${data.activeProfile?.toUpperCase()}`, 'success');
+                await dataStore.fetchData();
+                await dataStore.fetchActiveProfile();
+            } else {
+                throw new Error(data.error || 'Activation failed');
+            }
+        } catch (err) {
+            store.showToast(`Failed to activate: ${err.message}`, 'error');
+        }
+    },
+
+    /**
      * Fetch strategy health data for the inspector panel
      */
     async fetchHealthData() {

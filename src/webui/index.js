@@ -270,18 +270,30 @@ export function mountWebUI(app, dirname, accountManager) {
         try {
             const status = accountManager.getStatus();
             const { getCodexAccountInfo } = await import('../modules/codex-auth.js');
+            const { getActiveProfile } = await import('../modules/profile-manager.js');
+            const activeProfileData = await getActiveProfile().catch(() => ({ activeProfile: 'me' }));
+            const currentProfile = activeProfileData.activeProfile || 'me';
+
             const codexInfo = getCodexAccountInfo();
-            const accounts = [...status.accounts];
+            const accounts = status.accounts.map(a => {
+                let isActive = false;
+                if (currentProfile === 'me' && a.email.includes('tukroschu')) isActive = true;
+                if (currentProfile === 'son' && a.email.includes('arsen')) isActive = true;
+                return { ...a, isActive };
+            });
+
             let total = status.total;
             let available = status.available;
 
             if (codexInfo) {
                 total++;
                 available++;
+                const isCodexActive = currentProfile === 'codex';
                 accounts.push({
                     email: codexInfo.email,
                     source: codexInfo.source,
                     enabled: true,
+                    isActive: isCodexActive,
                     projectId: codexInfo.plan,
                     modelRateLimits: {},
                     isInvalid: false,
@@ -295,6 +307,7 @@ export function mountWebUI(app, dirname, accountManager) {
 
             res.json({
                 status: 'ok',
+                activeProfile: currentProfile,
                 accounts,
                 summary: {
                     total,
@@ -302,6 +315,33 @@ export function mountWebUI(app, dirname, accountManager) {
                     rateLimited: status.rateLimited,
                     invalid: status.invalid
                 }
+            });
+        } catch (error) {
+            res.status(500).json({ status: 'error', error: error.message });
+        }
+    });
+
+    /**
+     * POST /api/accounts/:email/activate - Activate an account / switch profile
+     */
+    app.post('/api/accounts/:email/activate', async (req, res) => {
+        try {
+            const { email } = req.params;
+            const { switchProfile } = await import('../modules/profile-manager.js');
+            let targetProfile = 'me';
+            if (email.toLowerCase().includes('codex')) {
+                targetProfile = 'codex';
+            } else if (email.toLowerCase().includes('arsen')) {
+                targetProfile = 'son';
+            } else if (email.toLowerCase().includes('tukroschu')) {
+                targetProfile = 'me';
+            }
+            const result = await switchProfile(targetProfile);
+            await accountManager.reload().catch(() => {});
+            res.json({
+                status: 'ok',
+                message: `Activated profile ${targetProfile} for ${email}`,
+                activeProfile: targetProfile
             });
         } catch (error) {
             res.status(500).json({ status: 'error', error: error.message });

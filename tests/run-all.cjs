@@ -9,6 +9,7 @@ const { spawn } = require('child_process');
 const path = require('path');
 
 const tests = [
+    { name: 'Codex Runner', file: 'test-codex-runner.cjs' },
     { name: 'Account Selection Strategies', file: 'test-strategies.cjs' },
     { name: 'Cache Control Stripping', file: 'test-cache-control.cjs' },
     { name: 'Thinking Signatures', file: 'test-thinking-signatures.cjs' },

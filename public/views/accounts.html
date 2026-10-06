@@ -130,7 +130,8 @@
 
                 <!-- Account Rows -->
                 <template x-for="acc in filteredAccounts" :key="acc.email">
-                    <tr class="border-b border-space-border/30 last:border-0 hover:bg-white/5 transition-colors group">
+                    <tr class="border-b border-space-border/30 last:border-0 hover:bg-white/5 transition-colors group"
+                        :class="acc.isActive ? 'bg-neon-cyan/5 border-l-4 border-l-neon-cyan' : ''">
                         <td class="pl-6 py-4">
                             <label class="relative inline-flex items-center cursor-pointer">
                                 <input type="checkbox" class="sr-only peer"
@@ -140,32 +141,64 @@
                             </label>
                         </td>
                         <td class="py-4">
-                            <div class="tooltip tooltip-right" :data-tip="Redact.email(acc.email)">
-                                <span class="font-mono text-sm text-gray-300 truncate max-w-[320px] inline-block cursor-help group-hover:text-white transition-colors"
-                                      x-text="formatEmail(Redact.email(acc.email))">
-                                </span>
+                            <div class="flex items-center gap-2 flex-wrap">
+                                <div class="tooltip tooltip-right" :data-tip="Redact.email(acc.email)">
+                                    <span class="font-mono text-sm text-gray-300 truncate max-w-[280px] inline-block cursor-help group-hover:text-white transition-colors"
+                                          :class="acc.isActive ? 'text-white font-bold' : ''"
+                                          x-text="formatEmail(Redact.email(acc.email))">
+                                    </span>
+                                </div>
+                                <template x-if="acc.isActive">
+                                    <span class="px-1.5 py-0.5 rounded text-[9px] font-mono font-bold uppercase bg-neon-cyan/20 text-neon-cyan border border-neon-cyan/40 shadow-[0_0_8px_rgba(6,182,212,0.4)] animate-pulse">
+                                        ACTIVE
+                                    </span>
+                                </template>
                             </div>
                         </td>
                         <td class="py-4">
-                            <span :class="acc.source === 'oauth' ? 'status-pill-purple' : 'status-pill-free'"
+                            <span :class="acc.source === 'codex-chatgpt' ? 'status-pill-ultra' : (acc.source === 'oauth' ? 'status-pill-purple' : 'status-pill-free')"
                                   x-text="acc.source || 'oauth'">
                             </span>
                         </td>
                         <td class="py-4">
                             <span :class="{
-                                      'status-pill-ultra': acc.subscription?.tier === 'ultra',
+                                      'status-pill-ultra': acc.subscription?.tier === 'ultra' || acc.source === 'codex-chatgpt',
                                       'status-pill-pro': acc.subscription?.tier === 'pro',
                                       'status-pill-free': !acc.subscription || acc.subscription.tier === 'free' || acc.subscription.tier === 'unknown'
                                   }"
-                                  x-text="(acc.subscription?.tier || 'free').toUpperCase()">
+                                  x-text="(acc.subscription?.tier || (acc.source === 'codex-chatgpt' ? 'CHATGPT' : 'free')).toUpperCase()">
                             </span>
                         </td>
                         <td class="py-4 cursor-pointer" @click="openQuotaModal(acc)">
-                            <div x-data="{ quota: getMainModelQuota(acc) }">
-                                <template x-if="quota.percent !== null">
+                            <div x-data="{ quota: getMainModelQuota(acc), weekly: getWeeklyClaudeQuota(acc) }">
+                                <!-- Weekly Claude Quota (Highlighted) -->
+                                <template x-if="weekly && weekly.percent !== null">
+                                    <div class="flex flex-col gap-0.5 mb-1 bg-space-950/40 p-1.5 rounded border border-purple-500/20">
+                                        <div class="flex items-center justify-between text-[10px] font-mono">
+                                            <span class="text-purple-300 font-semibold">Claude Weekly</span>
+                                            <span class="text-white font-bold" x-text="weekly.percent + '%'"></span>
+                                        </div>
+                                        <div class="w-28 bg-space-800 rounded-full h-1.5 overflow-hidden">
+                                            <div class="h-full rounded-full transition-all duration-300"
+                                                 :class="{
+                                                     'bg-neon-green': weekly.percent > 50,
+                                                     'bg-yellow-500': weekly.percent > 20 && weekly.percent <= 50,
+                                                     'bg-red-500': weekly.percent <= 20
+                                                 }"
+                                                 :style="`width: ${weekly.percent}%`">
+                                            </div>
+                                        </div>
+                                        <div class="flex items-center justify-between text-[8px] font-mono text-gray-400">
+                                            <span x-text="weekly.resetDesc || '7-day cycle'"></span>
+                                            <span class="text-purple-400 font-medium">49% left</span>
+                                        </div>
+                                    </div>
+                                </template>
+                                <!-- Standard Quota (Gemini / Codex) -->
+                                <template x-if="quota.percent !== null && (!weekly || weekly.percent === null)">
                                     <div class="flex items-center gap-2">
-                                        <div class="w-16 bg-gray-700 rounded-full h-2 overflow-hidden">
-                                            <div class="h-full rounded-full transition-all"
+                                        <div class="w-16 bg-space-800 rounded-full h-1.5 overflow-hidden">
+                                            <div class="h-full rounded-full transition-all duration-300"
                                                  :class="{
                                                      'bg-neon-green': quota.percent > 50,
                                                      'bg-yellow-500': quota.percent > 20 && quota.percent <= 50,
@@ -177,7 +210,7 @@
                                         <span class="text-xs font-mono text-gray-400" x-text="quota.percent + '%'"></span>
                                     </div>
                                 </template>
-                                <template x-if="quota.percent === null">
+                                <template x-if="quota.percent === null && (!weekly || weekly.percent === null)">
                                     <span class="text-xs text-gray-600">-</span>
                                 </template>
                                 <div x-show="acc.quotaThreshold !== undefined"
@@ -205,7 +238,14 @@
                             </div>
                         </td>
                         <td class="py-4 pr-6">
-                            <div class="flex justify-end gap-2">
+                            <div class="flex justify-end gap-2 items-center">
+                                <!-- Activate Button (show when not active) -->
+                                <button x-show="!acc.isActive"
+                                    class="px-2.5 py-1 text-[10px] font-bold font-mono uppercase tracking-wider rounded bg-neon-cyan/10 text-cyan-400 hover:bg-neon-cyan/20 border border-neon-cyan/30 hover:border-neon-cyan/50 transition-all flex items-center gap-1"
+                                    @click="activateAccount(acc.email)"
+                                    title="Set as active profile">
+                                    ⭐ Activate
+                                </button>
                                 <!-- Fix Button -->
                                 <button x-show="acc.status === 'invalid'"
                                     class="px-3 py-1 text-[10px] font-bold font-mono uppercase tracking-wider rounded bg-yellow-500/10 text-yellow-400 hover:bg-yellow-500/20 border border-yellow-500/30 hover:border-yellow-500/50 transition-all"

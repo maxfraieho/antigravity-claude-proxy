@@ -504,11 +504,13 @@ export class AccountManager {
             available: available.length,
             rateLimited: rateLimited.length,
             invalid: invalid.length,
+            activeIndex: this.#currentIndex,
             summary: `${this.#accounts.length} total, ${available.length} available, ${rateLimited.length} rate-limited, ${invalid.length} invalid`,
-            accounts: this.#accounts.map(a => ({
+            accounts: this.#accounts.map((a, idx) => ({
                 email: a.email,
                 source: a.source,
                 enabled: a.enabled !== false,  // Default to true if undefined
+                isActive: idx === this.#currentIndex,
                 projectId: a.projectId || null,
                 modelRateLimits: a.modelRateLimits || {},
                 isInvalid: a.isInvalid || false,

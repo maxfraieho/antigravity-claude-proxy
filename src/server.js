@@ -23,6 +23,8 @@ import { logger } from './utils/logger.js';
 import usageStats from './modules/usage-stats.js';
 import layaClient from './modules/laya-client.js';
 import { getCodexAccountInfo, getCodexAccessToken } from './modules/codex-auth.js';
+import codexRunner from './modules/codex-runner.js';
+import { getActiveProfile } from './modules/profile-manager.js';
 
 // Parse fallback flag directly from command line args to avoid circular dependency
 const args = process.argv.slice(2);
@@ -591,9 +593,14 @@ app.get('/account-limits', async (req, res) => {
             });
         }
 
+        // Get active profile for UI display
+        const activeProfileData = await getActiveProfile().catch(() => ({ activeProfile: 'me' }));
+        const currentProfile = activeProfileData.activeProfile || 'me';
+
         // Build response data
         const responseData = {
             timestamp: new Date().toLocaleString(),
+            activeProfile: currentProfile,
             totalAccounts: accountLimits.length,
             models: sortedModels,
             modelConfig: config.modelMapping || {},
@@ -601,9 +608,18 @@ app.get('/account-limits', async (req, res) => {
             accounts: accountLimits.map(acc => {
                 // Merge quota data with account metadata
                 const metadata = accountMetadataMap.get(acc.email) || {};
+                let isActive = false;
+                if (currentProfile === 'codex' && acc.email.includes('(Codex)')) {
+                    isActive = true;
+                } else if (currentProfile === 'me' && acc.email.includes('tukroschu')) {
+                    isActive = true;
+                } else if (currentProfile === 'son' && acc.email.includes('arsen') && !acc.email.includes('(Codex)')) {
+                    isActive = true;
+                }
                 return {
                     email: acc.email,
                     status: acc.status,
+                    isActive,
                     error: acc.error || null,
                     // Include metadata from AccountManager (WebUI needs these)
                     source: metadata.source || 'unknown',
@@ -911,6 +927,67 @@ app.post('/v1/messages', async (req, res) => {
 
         const modelId = requestedModel;
 
+        // Auto-failover / profile routing to Codex if Codex is active, model is GPT, or all Google accounts disabled
+        const activeProfileData = await getActiveProfile().catch(() => ({ activeProfile: 'me' }));
+        const isCodexActive = activeProfileData.activeProfile === 'codex';
+        const isCodexModel = requestedModel.startsWith('gpt-') || requestedModel.includes('codex') || requestedModel.includes('terra') || requestedModel.includes('luna');
+        const hasUsableGoogle = accountManager.getAvailableAccounts().length > 0;
+        const shouldUseCodex = (isCodexActive || isCodexModel || !hasUsableGoogle) && codexRunner.isCodexAvailable();
+
+        if (shouldUseCodex) {
+            const codexTargetModel = isCodexModel ? requestedModel : 'gpt-5.6-terra';
+            logger.info(`[Server] Routing /v1/messages to Codex CLI (model: ${codexTargetModel}, stream: ${!!stream})`);
+            const systemText = typeof system === 'string' ? system : (Array.isArray(system) ? system.map(s => s.text || '').join('\n') : '');
+
+            if (stream) {
+                res.setHeader('Content-Type', 'text/event-stream');
+                res.setHeader('Cache-Control', 'no-cache');
+                res.setHeader('Connection', 'keep-alive');
+                res.setHeader('X-Accel-Buffering', 'no');
+                res.flushHeaders();
+
+                const msgId = 'msg_' + Math.random().toString(36).substring(2, 14);
+                res.write(`event: message_start\ndata: ${JSON.stringify({ type: 'message_start', message: { id: msgId, type: 'message', role: 'assistant', model: codexTargetModel, content: [], stop_reason: null, usage: { input_tokens: 0, output_tokens: 0 } } })}\n\n`);
+                res.write(`event: content_block_start\ndata: ${JSON.stringify({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } })}\n\n`);
+
+                const generator = codexRunner.executeCodexStream({
+                    model: codexTargetModel,
+                    messages,
+                    system: systemText,
+                    max_tokens
+                });
+
+                for await (const event of generator) {
+                    if (event.type === 'content_block_delta' && event.delta?.text) {
+                        res.write(`event: content_block_delta\ndata: ${JSON.stringify({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: event.delta.text } })}\n\n`);
+                        if (res.flush) res.flush();
+                    }
+                }
+
+                res.write(`event: content_block_stop\ndata: ${JSON.stringify({ type: 'content_block_stop', index: 0 })}\n\n`);
+                res.write(`event: message_delta\ndata: ${JSON.stringify({ type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 100 } })}\n\n`);
+                res.write(`event: message_stop\ndata: ${JSON.stringify({ type: 'message_stop' })}\n\n`);
+                res.end();
+                return;
+            } else {
+                const codexResult = await codexRunner.executeCodex({
+                    model: codexTargetModel,
+                    messages,
+                    system: systemText,
+                    max_tokens
+                });
+                return res.json({
+                    id: codexResult.id,
+                    type: 'message',
+                    role: 'assistant',
+                    content: codexResult.content,
+                    model: codexTargetModel,
+                    stop_reason: 'end_turn',
+                    usage: codexResult.usage
+                });
+            }
+        }
+
         // Validate model ID before processing
         const { account: validationAccount } = accountManager.selectAccount();
         if (validationAccount) {
@@ -1199,8 +1276,94 @@ app.post('/v1/chat/completions', async (req, res) => {
         if (requestedModel === 'gemini-3.8-flash') {
             requestedModel = 'gemini-3.8-flash-tiered';
         }
-        if (requestedModel.startsWith('gpt-')) {
-            requestedModel = 'claude-sonnet-4-6';
+
+        // Auto-failover / profile routing to Codex if Codex is active, model is GPT, or all Google accounts disabled
+        const activeProfileData = await getActiveProfile().catch(() => ({ activeProfile: 'me' }));
+        const isCodexActive = activeProfileData.activeProfile === 'codex';
+        const isCodexModel = requestedModel.startsWith('gpt-') || requestedModel.includes('codex') || requestedModel.includes('terra') || requestedModel.includes('luna');
+        const hasUsableGoogle = accountManager.getAvailableAccounts().length > 0;
+        const shouldUseCodex = (isCodexActive || isCodexModel || !hasUsableGoogle) && codexRunner.isCodexAvailable();
+
+        if (shouldUseCodex) {
+            const codexTargetModel = isCodexModel ? requestedModel : 'gpt-5.6-terra';
+            logger.info(`[API] Routing /v1/chat/completions to Codex CLI (model: ${codexTargetModel}, stream: ${!!stream})`);
+            const chatId = 'chatcmpl-' + Math.random().toString(36).substring(2, 15);
+            const created = Math.floor(Date.now() / 1000);
+
+            if (stream) {
+                res.status(200);
+                res.setHeader('Content-Type', 'text/event-stream');
+                res.setHeader('Cache-Control', 'no-cache');
+                res.setHeader('Connection', 'keep-alive');
+                res.setHeader('X-Accel-Buffering', 'no');
+                res.flushHeaders();
+
+                const initialChunk = {
+                    id: chatId,
+                    object: "chat.completion.chunk",
+                    created,
+                    model: codexTargetModel,
+                    choices: [{ index: 0, delta: { role: "assistant", content: "" }, finish_reason: null }]
+                };
+                res.write(`data: ${JSON.stringify(initialChunk)}\n\n`);
+
+                const generator = codexRunner.executeCodexStream({
+                    model: codexTargetModel,
+                    messages: convertedMessages,
+                    system: systemPrompt,
+                    max_tokens
+                });
+
+                for await (const event of generator) {
+                    if (event.type === 'content_block_delta' && event.delta?.text) {
+                        const chunk = {
+                            id: chatId,
+                            object: "chat.completion.chunk",
+                            created,
+                            model: codexTargetModel,
+                            choices: [{ index: 0, delta: { content: event.delta.text }, finish_reason: null }]
+                        };
+                        res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+                        if (res.flush) res.flush();
+                    }
+                }
+
+                const closingChunk = {
+                    id: chatId,
+                    object: "chat.completion.chunk",
+                    created,
+                    model: codexTargetModel,
+                    choices: [{ index: 0, delta: {}, finish_reason: "stop" }]
+                };
+                res.write(`data: ${JSON.stringify(closingChunk)}\n\n`);
+                res.write(`data: [DONE]\n\n`);
+                res.end();
+                return;
+            } else {
+                const response = await codexRunner.executeCodex({
+                    model: codexTargetModel,
+                    messages: convertedMessages,
+                    system: systemPrompt,
+                    max_tokens
+                });
+                const fullText = response.content?.[0]?.text || '';
+                return res.json({
+                    id: chatId,
+                    object: "chat.completion",
+                    created,
+                    model: codexTargetModel,
+                    choices: [{
+                        index: 0,
+                        message: { role: "assistant", content: fullText },
+                        finish_reason: "stop"
+                    }],
+                    usage: {
+                        prompt_tokens: response.usage?.input_tokens || 0,
+                        completion_tokens: response.usage?.output_tokens || 0,
+                        total_tokens: (response.usage?.input_tokens || 0) + (response.usage?.output_tokens || 0)
+                    }
+                });
+            }
         }
 
         const modelMapping = config.modelMapping || {};
@@ -1571,6 +1734,78 @@ app.post('/v1/responses', async (req, res) => {
         let requestedModel = model || 'gemini-3-flash';
         if (requestedModel.includes('/')) requestedModel = requestedModel.split('/').pop();
         if (requestedModel === 'gemini-3.8-flash') requestedModel = 'gemini-3.8-flash-tiered';
+
+        // Auto-failover / profile routing to Codex if Codex is active, model is GPT, or all Google accounts disabled
+        const activeProfileData = await getActiveProfile().catch(() => ({ activeProfile: 'me' }));
+        const isCodexActive = activeProfileData.activeProfile === 'codex';
+        const isCodexModel = requestedModel.startsWith('gpt-') || requestedModel.includes('codex') || requestedModel.includes('terra') || requestedModel.includes('luna');
+        const hasUsableGoogle = accountManager.getAvailableAccounts().length > 0;
+        const shouldUseCodex = (isCodexActive || isCodexModel || !hasUsableGoogle) && codexRunner.isCodexAvailable();
+
+        if (shouldUseCodex) {
+            const codexTargetModel = isCodexModel ? requestedModel : 'gpt-5.6-terra';
+            logger.info(`[API] Routing /v1/responses to Codex CLI (model: ${codexTargetModel}, stream: ${!!stream})`);
+            const respId = 'resp_' + Math.random().toString(36).substring(2, 18);
+
+            if (stream) {
+                res.status(200);
+                res.setHeader('Content-Type', 'text/event-stream');
+                res.setHeader('Cache-Control', 'no-cache');
+                res.setHeader('Connection', 'keep-alive');
+                res.setHeader('X-Accel-Buffering', 'no');
+                res.flushHeaders();
+
+                const sendEvent = (eventName, data) => {
+                    res.write(`event: ${eventName}\ndata: ${JSON.stringify(data)}\n\n`);
+                    if (res.flush) res.flush();
+                };
+
+                sendEvent('response.created', { id: respId, object: 'response', status: 'in_progress', model: codexTargetModel, output: [] });
+                const outMsgId = 'msg_' + Math.random().toString(36).substring(2, 14);
+                sendEvent('response.output_item.added', { output_index: 0, item: { id: outMsgId, type: 'message', role: 'assistant', status: 'in_progress', content: [] } });
+                sendEvent('response.content_part.added', { output_index: 0, content_index: 0, part: { type: 'output_text', text: '' } });
+
+                let fullText = '';
+                const generator = codexRunner.executeCodexStream({
+                    model: codexTargetModel,
+                    messages: convertedMessages,
+                    system: systemPrompt,
+                    max_tokens: max_output_tokens
+                });
+
+                for await (const event of generator) {
+                    if (event.type === 'content_block_delta' && event.delta?.text) {
+                        fullText += event.delta.text;
+                        sendEvent('response.output_text.delta', { output_index: 0, content_index: 0, delta: event.delta.text });
+                    }
+                }
+
+                sendEvent('response.output_text.done', { output_index: 0, content_index: 0, text: fullText });
+                sendEvent('response.content_part.done', { output_index: 0, content_index: 0, part: { type: 'output_text', text: fullText } });
+                sendEvent('response.output_item.done', { output_index: 0, item: { id: outMsgId, type: 'message', status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: fullText }] } });
+                sendEvent('response.completed', { id: respId, object: 'response', status: 'completed', model: codexTargetModel, output: [{ id: outMsgId, type: 'message', status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: fullText }] }] });
+                res.write('data: [DONE]\n\n');
+                res.end();
+                return;
+            } else {
+                const codexResult = await codexRunner.executeCodex({
+                    model: codexTargetModel,
+                    messages: convertedMessages,
+                    system: systemPrompt,
+                    max_tokens: max_output_tokens
+                });
+                const fullText = codexResult.content?.[0]?.text || '';
+                const outMsgId = 'msg_' + Math.random().toString(36).substring(2, 14);
+                return res.json({
+                    id: respId,
+                    object: 'response',
+                    status: 'completed',
+                    model: codexTargetModel,
+                    output: [{ id: outMsgId, type: 'message', status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: fullText }] }]
+                });
+            }
+        }
+
         if (requestedModel.startsWith('gpt-')) requestedModel = 'claude-sonnet-4-6';
         const modelMapping = config.modelMapping || {};
         if (modelMapping[requestedModel]?.mapping) requestedModel = modelMapping[requestedModel].mapping;

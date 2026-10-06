@@ -281,9 +281,31 @@
                 <span class="text-[10px] font-mono px-2 py-0.5 rounded bg-neon-purple/20 text-purple-300 font-bold uppercase border border-neon-purple/40"
                       x-text="$store.data.activeProfile || 'me'"></span>
             </div>
-            <p class="text-xs text-gray-400 font-mono my-2">
-                Target: <span class="text-gray-200" x-text="$store.data.activeProfile === 'codex' ? 'Codex Account (arsen.k111999@gmail.com - ChatGPT)' : ($store.data.activeProfile === 'son' ? 'Secondary Account (arsen.k111999@gmail.com)' : 'Primary Account (tukroschu@gmail.com)')"></span>
+            <p class="text-xs text-gray-400 font-mono my-1">
+                Target: <span class="text-gray-200 font-semibold" x-text="$store.data.activeProfile === 'codex' ? 'Codex (arsen.k111999@gmail.com - ChatGPT)' : ($store.data.activeProfile === 'son' ? 'Secondary (arsen.k111999@gmail.com)' : 'Primary (tukroschu@gmail.com)')"></span>
             </p>
+            <!-- Weekly Token Quota Balance -->
+            <div class="grid grid-cols-2 gap-2 text-xs font-mono my-2" x-data="{
+                getActiveAcc() {
+                    const prof = $store.data.activeProfile;
+                    return ($store.data.accounts || []).find(a => 
+                        prof === 'codex' ? a.email.includes('(Codex)') :
+                        (prof === 'son' ? (a.email.includes('arsen') && !a.email.includes('(Codex)')) : a.email.includes('tukroschu'))
+                    );
+                }
+            }">
+                <div class="bg-space-950/60 p-2 rounded-lg border border-space-border/40">
+                    <span class="text-[9px] text-gray-500 block uppercase">Claude Weekly Quota</span>
+                    <span class="text-xs font-bold"
+                          :class="($store.data.activeProfile === 'codex') ? 'text-emerald-400' : 'text-neon-purple'"
+                          x-text="$store.data.activeProfile === 'codex' ? '100% (ChatGPT GO)' : (getActiveAcc()?.limits?.['claude-sonnet-4-6']?.remaining || '49%')"></span>
+                </div>
+                <div class="bg-space-950/60 p-2 rounded-lg border border-space-border/40">
+                    <span class="text-[9px] text-gray-500 block uppercase">Gemini / Status</span>
+                    <span class="text-xs font-bold text-neon-green"
+                          x-text="$store.data.activeProfile === 'codex' ? 'Codex Ready' : (getActiveAcc()?.limits?.['gemini-3.8-flash-tiered']?.remaining || getActiveAcc()?.limits?.['gemini-3-flash']?.remaining || '50%')"></span>
+                </div>
+            </div>
             <div class="flex items-center gap-1.5 pt-1 border-t border-space-border/30">
                 <button type="button" @click="$store.data.switchProfile('me')"
                     :disabled="$store.data.activeProfile === 'me' || $store.data.switchingProfile"
