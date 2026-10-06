@@ -1,0 +1,5 @@
+# Charm Crush Configuration
+option ui compact false
+option ui diff split
+model large antigravity/gemini-3.8-flash-tiered
+model small antigravity/gemini-3-flash

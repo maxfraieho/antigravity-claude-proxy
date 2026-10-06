@@ -1,0 +1,75 @@
+{
+  "mcpServers": {
+    "notebooklm": {
+      "type": "http",
+      "url": "http://192.168.3.184:8002/mcp",
+      "headers": {
+        "Accept": "application/json, text/event-stream"
+      }
+    },
+    "sequential-thinking": {
+      "command": "C:\\Program Files\\nodejs\\npx.cmd",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-sequential-thinking"
+      ]
+    },
+    "n8n": {
+      "type": "http",
+      "url": "https://n8n.exodus.pp.ua/mcp-server/http",
+      "headers": {
+        "Authorization": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhYjg1MjVmYy0wYjBhLTQzZDUtYmJmMS02ZjJkNjBiY2M3M2UiLCJpc3MiOiJuOG4iLCJhdWQiOiJtY3Atc2VydmVyLWFwaSIsImp0aSI6ImFmMzhjYzFlLTRlMTEtNGIxZS04NGEwLTZhMzY4OWFlMDI4NiIsImlhdCI6MTc3NjA3NDgyNX0.2sseKoimZzBd70byLWfxBQRD9M41bMFsa7hb6qG_tH8",
+        "Accept": "application/json, text/event-stream"
+      }
+    },
+    "bsdd": {
+      "type": "http",
+      "url": "http://192.168.3.161:8765/mcp",
+      "headers": {
+        "Accept": "application/json, text/event-stream"
+      }
+    },
+    "gitnexus": {
+      "type": "http",
+      "url": "http://192.168.3.184:4747/api/mcp",
+      "headers": {
+        "Accept": "application/json, text/event-stream"
+      }
+    },
+    "ai-memory": {
+      "type": "http",
+      "url": "http://192.168.3.184:49374/mcp",
+      "headers": {
+        "Accept": "application/json, text/event-stream"
+      }
+    },
+    "chrome-local": {
+      "command": "C:\\Program Files\\nodejs\\npx.cmd",
+      "args": [
+        "-y",
+        "chrome-devtools-mcp@latest",
+        "--browser-url=http://127.0.0.1:9222"
+      ]
+    },
+    "browser-harness-win": {
+      "command": "C:\\Program Files\\Qwen\\resources\\python\\uvx.exe",
+      "args": [
+        "browser-harness"
+      ],
+      "env": {
+        "BU_CDP_URL": "http://127.0.0.1:9222"
+      }
+    },
+    "open-design": {
+      "command": "C:\\Program Files\\nodejs\\npx.cmd",
+      "args": [
+        "-y",
+        "open-design-mcp"
+      ],
+      "env": {
+        "OD_DAEMON_URL": "http://192.168.3.184:7459",
+        "OD_DATA_DIR": "C:\\Users\\vokov\\.open-design"
+      }
+    }
+  }
+}

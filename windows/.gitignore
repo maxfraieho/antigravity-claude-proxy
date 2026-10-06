@@ -1,0 +1,13 @@
+# Antigravity tokens and sensitive state
+*antigravity-oauth-token*
+*.token
+*.key
+*.db-wal
+*.db-shm
+*.log
+
+# Windows temp
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/

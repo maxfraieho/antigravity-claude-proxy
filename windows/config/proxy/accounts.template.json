@@ -1,0 +1,8 @@
+{
+  "accounts": [],
+  "settings": {
+    "selectionStrategy": "hybrid",
+    "fallbackEnabled": true
+  },
+  "activeIndex": 0
+}

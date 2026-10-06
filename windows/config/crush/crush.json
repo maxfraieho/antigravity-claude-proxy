@@ -1,0 +1,125 @@
+{
+  "$schema": "https://charm.land/crush.json",
+  "default_provider": "antigravity",
+  "models": {
+    "large": {
+      "provider": "antigravity",
+      "model": "gemini-3-flash"
+    },
+    "small": {
+      "provider": "antigravity",
+      "model": "gemini-3-flash"
+    }
+  },
+  "recent_models": {
+    "large": [
+      {
+        "model": "gemini-3-flash",
+        "provider": "antigravity"
+      },
+      {
+        "model": "claude-sonnet-4-6",
+        "provider": "antigravity"
+      }
+    ]
+  },
+  "permissions": {
+    "allowed_tools": [
+      "bash",
+      "cmd",
+      "powershell",
+      "view",
+      "edit",
+      "write",
+      "glob",
+      "ls",
+      "grep",
+      "sequential-thinking",
+      "screenshot",
+      "gitnexus",
+      "ai-memory",
+      "notebooklm",
+      "bsdd",
+      "n8n"
+    ]
+  },
+  "providers": {
+    "antigravity": {
+      "name": "Antigravity Proxy",
+      "type": "openai-compat",
+      "base_url": "http://127.0.0.1:8080/v1",
+      "api_key": "drakon-mcp-2026",
+      "models": [
+        {
+          "id": "gemini-3-flash",
+          "name": "Gemini 3 Flash (Fast)"
+        },
+        {
+          "id": "claude-sonnet-4-6",
+          "name": "Claude Sonnet 4.6 (Pro)"
+        },
+        {
+          "id": "claude-opus-4-6-thinking",
+          "name": "Claude Opus 4.6 (Thinking)"
+        },
+        {
+          "id": "gemini-3.8-flash-tiered",
+          "name": "Gemini 3.8 Flash (High Quota)"
+        }
+      ]
+    }
+  },
+  "mcp": {
+    "sequential-thinking": {
+      "type": "stdio",
+      "command": "C:\\Program Files\\nodejs\\npx.cmd",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-sequential-thinking"
+      ]
+    },
+    "gitnexus": {
+      "type": "http",
+      "url": "http://192.168.3.184:4747/api/mcp",
+      "headers": {
+        "Accept": "application/json, text/event-stream"
+      }
+    },
+    "ai-memory": {
+      "type": "http",
+      "url": "http://192.168.3.184:49374/mcp",
+      "headers": {
+        "Accept": "application/json, text/event-stream"
+      }
+    },
+    "notebooklm": {
+      "type": "http",
+      "url": "http://192.168.3.184:8002/mcp",
+      "headers": {
+        "Accept": "application/json, text/event-stream"
+      }
+    },
+    "bsdd": {
+      "type": "http",
+      "url": "http://192.168.3.161:8765/mcp",
+      "headers": {
+        "Accept": "application/json, text/event-stream"
+      }
+    },
+    "n8n": {
+      "type": "http",
+      "url": "https://n8n.exodus.pp.ua/mcp-server/http",
+      "headers": {
+        "Authorization": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhYjg1MjVmYy0wYjBhLTQzZDUtYmJmMS02ZjJkNjBiY2M3M2UiLCJpc3MiOiJuOG4iLCJhdWQiOiJtY3Atc2VydmVyLWFwaSIsImp0aSI6ImFmMzhjYzFlLTRlMTEtNGIxZS04NGEwLTZhMzY4OWFlMDI4NiIsImlhdCI6MTc3NjA3NDgyNX0.2sseKoimZzBd70byLWfxBQRD9M41bMFsa7hb6qG_tH8",
+        "Accept": "application/json, text/event-stream"
+      }
+    },
+    "screenshot": {
+      "type": "stdio",
+      "command": "python",
+      "args": [
+        "C:\\Users\\vokov\\bin\\screenshot_mcp.py"
+      ]
+    }
+  }
+}
