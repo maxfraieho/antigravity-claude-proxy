@@ -1,67 +1,78 @@
-# antigravity-claude-proxy
+# antigravity-claude-proxy (Unified Monorepo)
 
-> Fork of [badrisnarayanan/antigravity-claude-proxy](https://github.com/badrisnarayanan/antigravity-claude-proxy)
+> Fork of [badrisnarayanan/antigravity-claude-proxy](https://github.com/badrisnarayanan/antigravity-claude-proxy) by [maxfraieho](https://github.com/maxfraieho)
 
-AGY Proxy runs on Android/Termux and provides **dual-protocol API access** to Google Cloud Code (Gemini models via Antigravity CLI):
+Comprehensive proxy server, web management console, and multi-platform automation toolkit for **Google Cloud Code (Gemini models via Antigravity CLI)** and **OpenAI Codex CLI (ChatGPT GO fallback)**.
 
-## What was added in this fork
+---
 
+## 🚀 Unified Monorepo Architecture
+
+This repository unifies the proxy server engine and the Windows automation suite:
+
+* **`src/`** — Core Node.js / Express proxy engine, multi-account rotation, session management.
+* **`public/`** — Modern WebUI Dashboard at `:8080` with real-time quotas, telemetry, and **full bilingual i18n (`en`, `uk`, `zh`, `tr`, `id`, `pt`)**.
+* **`windows/`** — Turnkey Windows 10/11 automation toolkit (formerly `agy-windows-toolkit`):
+  * Multi-profile isolation (`me`, `son`, `codex`) via NTFS Junctions.
+  * PowerShell helpers and background task scheduling (`start-proxy.cmd`, `stop-proxy.cmd`, `agy-switch.ps1`).
+  * Charm Crush CLI integration and Laya Decision Engine bridge.
+* **`docs/`** — Comprehensive documentation, including the bilingual **[User Manual (UK / EN)](docs/USER_MANUAL.md)**.
+* **`tests/`** — Comprehensive test suite for account rotation, thinking signatures, and Codex CLI runner.
+
+---
+
+## ⚡ Key Features
+
+* **Dual Protocol Endpoints:**
+  * **Anthropic-compatible** `/v1/messages` (Claude Code CLI support).
+  * **OpenAI-compatible** `/v1/chat/completions` with SSE streaming.
+  * **OpenAI Responses API** `/v1/responses` (used by Codex CLI with `wire_api=responses`).
+* **Smart Failover & Local Codex CLI Integration:**
+  * Automatically routes requests or falls back to local OpenAI Codex CLI when Google accounts are rate-limited or depleted.
+* **Multi-Account Profile Management:**
+  * Seamless switching between accounts (`me` — primary Google, `son` — secondary Google, `codex` — ChatGPT GO).
+* **Bilingual Web Dashboard (`:8080`):**
+  * Switch between Ukrainian 🇺🇦 and English 🇬🇧 in **Settings → Interface → Language**.
+
+---
+
+## 📖 Quick Links & Manuals
+
+* 📘 **[Bilingual User Manual / Посібник користувача](docs/USER_MANUAL.md)** — повний посібник українською та англійською мовами.
+* 🪟 **[Windows Toolkit Documentation](windows/README.md)** — налаштування та автоматизація під Windows 10/11.
+
+---
+
+## 🛠️ Quick Start
+
+### Windows 10/11
+```powershell
+# Run turnkey setup from Windows directory
+.\windows\setup.ps1
+
+# Or manage the service
+start-proxy.cmd
+stop-proxy.cmd
 ```
-feat(server): add OpenAI-compatible /v1/chat/completions endpoint
-```
 
-The original proxy only supported Anthropic-compatible `/v1/messages`. This fork adds a full OpenAI-compatible `/v1/chat/completions` endpoint with SSE streaming support — enabling direct use with any OpenAI-compatible agent framework.
-
-## Features
-
-- **Anthropic-compatible** `/v1/messages` endpoint (original)
-- **OpenAI-compatible** `/v1/chat/completions` endpoint (added)
-- Multi-account rotation with rate-limit handling
-- SSE streaming support for both protocols
-- Web dashboard at `:8080`
-- `/health` endpoint with per-model rate-limit status
-
-## Deployment (Android/Termux)
-
+### Linux / Android Termux
 ```bash
-cd ~/CLIProxyAPI/antigravity-claude-proxy
-node src/index.js
+npm install
+npm start
 ```
 
-Expose via Cloudflare tunnel: `https://agy.exodus.pp.ua`
-
-## Quick test
-
+### Quick Verification
 ```bash
-curl https://agy.exodus.pp.ua/health
+# Health check
+curl -s http://localhost:8080/health
 
-curl -X POST https://agy.exodus.pp.ua/v1/chat/completions \
+# Test Chat Completions (Codex Fallback)
+curl -X POST http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{"model":"gemini-2.5-flash","max_tokens":100,"messages":[{"role":"user","content":"Hi"}]}'
+  -d '{"model":"gpt-5.6-terra","messages":[{"role":"user","content":"Respond with CODEX_OK"}]}'
+
+# Test Responses API
+curl -X POST http://localhost:8080/v1/responses \
+  -H "Content-Type: application/json" \
+  -d '{"model":"gemini-3-flash","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"PONG"}]}],"stream":false}'
 ```
-
-## Integration with free-claude-code-proxy
-
-This proxy can be registered as a custom provider in the `free-claude-code-proxy` OpenAI-compatible routing proxy:
-
-```python
-# Provider descriptor (add to PROVIDER_DESCRIPTORS)
-"agy": ProviderDescriptor(
-    default_base_url="https://agy.exodus.pp.ua/v1",
-    static_credential="none",  # no auth required on LAN
-)
-```
-
-Slot routing example:
-- `sonnet` slot → `gemini-2.5-pro` via agy (reasoning)
-- `haiku` slot → `gemini-2.5-flash` via agy (fast)
-- NIM models as fallback when AGY account is rate-limited
-
-This creates a **hybrid routing layer**: free Gemini via AGY + free NIM models as fallback.
-
-## Available models (via /health)
-
-- `gemini-2.5-pro` — best reasoning
-- `gemini-2.5-flash` — fast
-- `gemini-3.5-flash-medium`, `gemini-3.1-pro-high`, etc.
-- `claude-sonnet-4-6`, `claude-opus-4-6-thinking` — via Claude MAX plan
